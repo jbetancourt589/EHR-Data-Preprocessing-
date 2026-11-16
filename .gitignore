@@ -1,16 +1,40 @@
+
+# PyCharm
 .idea/
-# Ignore all data files
+
+# Raw and restricted MIMIC data
 Raw Data/
 Compressed Raw Data/
+data/*
+!data/synthetic_sample.jsonl
 
-# Ignore outputs
+# Processed outputs
 output.json
 output.jsonl
 output*
 
-# Python cache
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# Python virtual environment
+.venv/
+
+# Python cache and build artifacts
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+.pytest_cache/
 
-# Virtual environment
-.venv/
+# Local databases and backups
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+
+# Temporary files
+*.log
+*.tmp

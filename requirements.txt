@@ -1,0 +1,15 @@
+# Runtime dependencies (versions tested locally on Windows / Python 3.14)
+pandas>=2.2
+plotly>=5.24
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+SQLAlchemy>=2.0
+streamlit>=1.50
+zstandard>=0.23
+
+# Development
+pytest>=8
+
+# Install the dashboard's analytics package in editable mode:
+#   pip install -r requirements.txt
+#   pip install -e .
