@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ehr-analytics"
+version = "0.1.0"
+description = "Local, PostgreSQL-backed clinical analytics dashboard for MIMIC-derived EHR data"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "plotly>=5.24",
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
+    "SQLAlchemy>=2.0",
+    "streamlit>=1.50",
+    "zstandard>=0.23",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+# Only the importable analytics package is installed. The ETL scripts in src/
+# (format.py, load_to_sql.py, ...) stay standalone scripts.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ehr_analytics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "db: integration tests that need the synthetic ehr_analytics_test database",
+    "live: opt-in checks against the real database (set RUN_LIVE_DB_TESTS=1)",
+]

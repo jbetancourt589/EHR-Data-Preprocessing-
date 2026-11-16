@@ -1,268 +1,169 @@
-# EHR Data Cleaning & Structuring for LLMs
+# EHR Clinical Analytics Platform
 
-**Healthcare Data Engineering | Clinical Data Preprocessing | Python | Machine Learning**
+**Healthcare data engineering | PostgreSQL analytics | Streamlit dashboard | Python**
 
-## Overview
+A local, privacy-conscious pipeline and dashboard for MIMIC-derived electronic health record (EHR) data:
 
-This project implements a Python-based preprocessing pipeline that converts raw Electronic Health Record (EHR) data into structured, chronologically organized patient timelines.
+1. **Preprocess** raw admission timelines into clean, chronologically ordered patient records.
+2. **Load** them into a PostgreSQL database (about 200k patients, 490k admissions, 27M lab results, 33M medication events).
+3. **Explore** the data in a multipage Streamlit dashboard where every number comes from a visible SQL query.
 
-Clinical datasets often contain fragmented information across physician notes, laboratory results, medications, and hospital transfers. Inconsistent timestamps, duplicate records, and unstructured text make these datasets difficult to analyze or use in machine learning workflows.
+> **Status: work in progress.** Three dashboard pages are finished (Hospital Overview, Medication Analytics, Lab Results Analytics). Three more are planned but not built yet. See [Project status](#project-status).
 
-The pipeline addresses these challenges by parsing JSONL records, extracting clinical events, standardizing their structure, cleaning text, and organizing patient histories into a consistent format.
+## Safety and privacy first
 
-**Goal:** Transform complex EHR records into structured datasets suitable for downstream analysis and potential clinical language-model applications.
+- **Everything runs locally.** The dashboard binds to `localhost`, sends no telemetry, and calls no external APIs.
+- **No MIMIC data is in this repository.** Raw data, processed output (`output.jsonl`) and `.env` are git-ignored. Only a tiny synthetic sample (`data/synthetic_sample.jsonl`) is tracked.
+- **Read-only access.** The dashboard connects as a dedicated `ehr_dashboard` role: SELECT only, read-only transactions, 15 s statement timeout, no access to `clinical_notes`. The app refuses to start as a superuser.
+- **Aggregates only.** No patient identifiers, individual encounters or note text are ever displayed.
+- **Provisional disclosure controls** (not proof of MIMIC/PhysioNet compliance): counts under 11 are suppressed or merged, complementary suppression where exact counts are shown, breakdown and filtered counts rounded to the nearest 5, filter-differencing check, statistics require 30 or more values, no min/max shown.
+- Filter values are sent as bind parameters. There is no free-form SQL input.
 
-## Technologies
+You must hold the appropriate PhysioNet credentials to use MIMIC data. This project does not provide or redistribute it.
 
-**Language:** Python
-
-**Data Formats:** JSON, JSONL
-
-**Domain:** Electronic Health Records, clinical data preprocessing, healthcare data engineering
-
-**Techniques:** Data cleaning, event extraction, chronological sorting, text normalization, record deduplication, structured data transformation
-
-**Dataset:** MIMIC-derived clinical records (stored locally and excluded from GitHub)
-
-## Processing Pipeline
+## Architecture
 
 ```text
-Raw EHR Records (JSONL)
-          |
-          v
-JSON Parsing & Validation
-          |
-          v
-Clinical Event Extraction
-          |
-          v
-Text Cleaning & Normalization
-          |
-          v
-Event Deduplication
-          |
-          v
-Timestamp Processing
-          |
-          v
-Chronological Event Ordering
-          |
-          v
-Structured Patient Timeline
-          |
-          v
-Downstream Analytics / LLM Preparation
+Compressed MIMIC timelines (.jsonl.zst)           (local only, git-ignored)
+        |  src/format.py            parse labs/meds/transfers/notes, deduplicate, order
+        v
+output.jsonl                                      (local only, git-ignored)
+        |  src/load_to_sql.py       batched, transactional, resumable import
+        v
+PostgreSQL: ehr_analytics (7 tables, public schema)
+        |  sql/analytics/*.sql      precomputed AGGREGATE-ONLY summaries (analytics schema)
+        v
+sql/queries/<page>/*.sql            readable page queries ({{ base }} / {{ where }} templates)
+        |  repositories -> presenters -> charts
+        v
+dashboard/ (Streamlit, Plotly)      each card has SQL | Table | Chart tabs
 ```
 
-The pipeline prepares data for potential downstream modeling. It does not itself train or evaluate a language model.
+Layers, all in `src/ehr_analytics/`:
 
-## Key Features
+| Layer | Responsibility |
+|---|---|
+| `db.py`, `sql_loader.py` | read-only engine; loads and renders `.sql` templates |
+| `filters.py` | whitelisted filters turned into bind parameters |
+| `repositories/` | run a query, return data plus the exact SQL and parameters |
+| `presenters/` | apply privacy rules and formatting |
+| `privacy.py` | suppression, rounding, differencing checks |
+| `charts/` | pure Plotly functions (light and dark themes) |
 
-### 1. Clinical Event Extraction
+Precomputed summaries exist because scanning 27M to 33M rows per click is too slow. They store only counts and quartiles by drug or test, unit, admission type, age band, year and day of stay.
 
-Parses multiple types of clinical records into structured event representations.
+## SQL showcase
 
-**Medications**
-- Medication name
-- Dose and administration route
-- Order or discontinuation status
+The queries use CTEs, window functions (`ROW_NUMBER`, `FIRST_VALUE`), `FILTER (WHERE ...)`, `GROUPING SETS` with `GROUPING()`, `PERCENTILE_CONT`, `width_bucket` histograms, `HAVING`, `EXISTS`, and `string_agg`. Open any card's **SQL** tab in the dashboard to see the exact query behind it.
 
-**Laboratory Results**
-- Laboratory test name
-- Recorded value and units
-- Available result flags, including abnormality indicators
+## Dashboard pages
 
-**Hospital Transfers**
-- Transfer direction (IN/OUT)
-- Associated care unit
+| Page | What it shows | Status |
+|---|---|---|
+| **Hospital Overview** | admissions, length of stay, admission types, discharge destinations, anchor-age groups | done |
+| **Medication Analytics** | top drugs, orders vs stops, utilization, drug explorer (routes, spelling variants), co-ordering pairs and lift | done |
+| **Lab Results Analytics** | most common tests, results by day of stay and year, value distributions, flag and value-type breakdown | done |
+| **Methods & Privacy** | definitions, disclosure controls, security notes, known data quirks | done |
+| Patient Cohort Explorer | filter a cohort and see aggregate statistics | planned |
+| Transfers & Patient Journeys | care-unit flow and time per unit | planned |
+| Data Quality & ETL Monitoring | the data issues listed below, as a monitoring page | planned |
 
-**Clinical Notes**
-- Free-text medical documentation
-- Cleaned and formatted note content
+## Project status
 
-### 2. Chronological Patient Timelines
+In progress or not done yet:
 
-Organizes extracted events by their associated timestamps to create coherent patient histories.
+- The **three planned pages** above are not built. The sidebar lists them as "In development".
+- **Privacy rules are provisional.** They have not been formally reviewed.
+- **Lab medians ignore the dashboard filters** (precomputed over all admissions), and the lab day-of-stay and histogram views ignore the year filter.
+- **Preprocessing issues found but not fixed** in `src/format.py` (see below). Fixing them means rerunning the preprocessing and import, which has deliberately not been done.
+- No screenshots yet. They should be made from synthetic data.
 
-The pipeline handles inconsistent or malformed timestamp values and groups related event types into a standardized output structure.
+### Known data quirks (found in the source file)
 
-This enables clinical events from different sources to be reviewed in chronological context.
+- **Every lab is flagged "abnormal"** (27.2M of 27.2M), so an abnormal rate cannot be computed. The dashboard reports it as "Not estimable".
+- **About 578,000 lab results are the literal text `nan`**, a missing value written as text. The summaries count them as *missing results*, not text findings.
+- **Lab names that differ only by capitalisation are merged** in the summaries (for example "Mesothelial cells" and "Mesothelial Cells").
+- **Drug names were title-cased** by `format.py`, so some read oddly (`D5Ns` for D5NS). The dashboard shows them as stored.
+- 132 admissions lack admit/discharge times and 157 have a discharge before admission. They are excluded from length-of-stay statistics only and are never modified or deleted.
+- MIMIC shifts dates per patient, so calendar years are not real. Day of stay is the meaningful time axis.
 
-### 3. Clinical Note Cleaning
+## Setup
 
-Processes unstructured medical documentation to improve consistency and readability.
+Requires Python 3.11 or newer and PostgreSQL (developed on 18).
 
-Cleaning operations include:
-- Removing unnecessary whitespace and formatting artifacts
-- Normalizing line breaks
-- Preserving meaningful section structure
-- Retaining redaction placeholders
-- Reducing redundant text
+```bash
+python -m venv .venv
+.venv\Scripts\activate            # Windows (use source .venv/bin/activate elsewhere)
+pip install -r requirements.txt
+pip install -e .
+copy .env.example .env             # then fill in YOUR passwords locally; never commit .env
+```
 
-The objective is to improve formatting without intentionally removing clinically meaningful information.
+### Build the data (needs MIMIC access; slow)
 
-### 4. Event Deduplication
+```bash
+python src/format.py               # compressed raw data -> output.jsonl (large, local only)
+psql -d ehr_analytics -f sql/schema.sql
+python src/load_to_sql.py          # import into PostgreSQL (batched, resumable)
+```
 
-Identifies and removes duplicate records to reduce repeated clinical information within the output timeline.
+### Create the dashboard role and summaries
 
-This supports more consistent downstream processing and patient-level inspection.
+Review each file first, then run as a PostgreSQL administrator:
 
-### 5. Patient-Level Debugging
+```bash
+psql -d ehr_analytics -f sql/admin/001_dashboard_role.sql     # then: \password ehr_dashboard
+psql -d ehr_analytics -f sql/analytics/001_schema_and_views.sql
+psql -d ehr_analytics -f sql/analytics/002_medication_summaries.sql
+psql -d ehr_analytics -f sql/analytics/003_grants.sql
+psql -d ehr_analytics -f sql/analytics/004_lab_summaries.sql   # about 12 minutes
+```
 
-Includes a utility for inspecting an individual patient's records after preprocessing.
+Put the `ehr_dashboard` password in `.env` as `DASHBOARD_DB_PASSWORD`. Summary files can be rebuilt with the `refresh_*` and `drop_lab_summaries.sql` scripts.
 
-This helps verify:
-- Extracted event categories
-- Clinical note formatting
-- Event ordering
-- Output structure
-- Potential parsing inconsistencies
+### Run the dashboard
 
-### 6. Dataset-Level Processing
+```bash
+streamlit run dashboard/app.py
+```
 
-Supports both individual-patient inspection and broader JSONL dataset processing.
+Open http://localhost:8501. Pages whose summaries have not been built show a setup message instead of failing.
 
-This separation helps with debugging before running larger preprocessing jobs.
+## Tests
 
-## Repository Structure
+```bash
+pytest
+```
+
+Unit and page tests run against a **synthetic** database named `ehr_analytics_test` (create it with `sql/admin/002_test_database.sql`). The tests refuse to run against any other database, and they never touch real data. Tests that need the synthetic database are skipped if it is missing. Opt-in checks against the real database: `RUN_LIVE_DB_TESTS=1 pytest tests/test_live_dashboard.py`.
+
+## Repository layout
 
 ```text
-EHR-Data-Preprocessing/
-├── format.py
-├── patient_checker.py
-├── .gitignore
-└── README.md
+dashboard/            Streamlit app: app.py, views/ (pages), components/
+src/ehr_analytics/    analytics package (db, filters, privacy, repositories, presenters, charts)
+src/format.py         raw timelines -> cleaned JSONL
+src/load_to_sql.py    JSONL -> PostgreSQL
+src/*.py              diagnostics (inspect_mimic, validate_output, analyze_lab_failure)
+sql/schema.sql        table definitions and indexes
+sql/admin/            dashboard role and test database
+sql/analytics/        precomputed summary views (aggregate-only)
+sql/queries/          one folder of readable queries per dashboard page
+tests/                pytest suite (synthetic data only)
+data/synthetic_sample.jsonl   synthetic example record
+patient_checker.py    small script for inspecting a few records
 ```
 
-**`format.py`** — Main preprocessing script responsible for parsing clinical records, extracting events, cleaning text, and constructing structured timelines.
+## Limitations
 
-**`patient_checker.py`** — Utility for inspecting individual patient records and checking preprocessing results.
-
-**`.gitignore`** — Excludes raw clinical datasets and generated files from version control.
-
-## Example Input and Output
-
-The following is a **synthetic illustration** of the intended data transformation. It is not a record from an actual patient.
-
-### Input (simplified JSONL)
-
-```json
-{"patient_id": "EXAMPLE_001", "time": "2026-01-10 09:15:00", "type": "LAB", "name": "Potassium", "value": 4.2, "unit": "mmol/L"}
-{"patient_id": "EXAMPLE_001", "time": "2026-01-10 08:30:00", "type": "TRANSFER", "direction": "IN", "care_unit": "ICU"}
-```
-
-### Output (illustrative structure)
-
-```json
-{
-  "patient_info": {
-    "patient_id": "EXAMPLE_001"
-  },
-  "timeline": [
-    {
-      "time": "2026-01-10 08:30:00",
-      "category": "TRANSFER",
-      "data": {
-        "direction": "IN",
-        "care_unit": "ICU"
-      },
-      "notes": null
-    },
-    {
-      "time": "2026-01-10 09:15:00",
-      "category": "LAB",
-      "data": {
-        "name": "Potassium",
-        "value": 4.2,
-        "unit": "mmol/L"
-      },
-      "notes": null
-    }
-  ]
-}
-```
-
-The exact input field names and generated output schema depend on the implementation in `format.py`.
-
-## How to Run
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/jbetancourt589/EHR-Data-Preprocessing-.git
-cd EHR-Data-Preprocessing-
-```
-
-### 2. Prepare Input Data
-
-Place the required JSONL clinical records in the local input directory expected by the scripts.
-
-```text
-Raw Data/
-```
-
-Raw clinical data is not distributed with this repository.
-
-Depending on the source dataset, access permissions and data-use requirements may apply.
-
-### 3. Run the Preprocessing Pipeline
-
-```bash
-python format.py
-```
-
-The script processes clinical records and produces structured patient data according to its configured input and output paths.
-
-### 4. Inspect an Individual Patient
-
-```bash
-python patient_checker.py
-```
-
-Use this utility to examine an individual patient timeline and assess whether clinical events were parsed, cleaned, and chronologically organized as expected.
-
-## Applications
-
-Structured EHR timelines can support several downstream research and engineering tasks.
-
-**Healthcare Data Analytics:** Organizing heterogeneous clinical events into consistent records for analysis.
-
-**Clinical NLP:** Preparing free-text notes and associated structured events for further language-processing workflows.
-
-**Machine Learning Data Preparation:** Transforming raw clinical records into standardized representations for subsequent feature engineering or model development.
-
-**Clinical Language Models:** Supporting the preparation of longitudinal patient histories for potential LLM training or evaluation.
-
-These applications describe possible uses of the prepared data, not independently validated downstream results.
-
-## Data Privacy and Limitations
-
-- Raw MIMIC-derived records are excluded from the public repository.
-- MIMIC data access and redistribution remain subject to the applicable PhysioNet credentialing and data-use agreements.
-- Synthetic records should be used for public demonstrations.
-- The pipeline does not independently guarantee the clinical accuracy of extracted information.
-- Incorrect timestamps, incomplete source records, or duplicate-detection rules can affect timeline quality.
-- This project does not implement clinical decision-making or diagnostic functionality.
-- Prepared data should be evaluated for completeness, consistency, and privacy before downstream model training.
-
-## Why This Project Matters
-
-Clinical data preparation is a critical step in healthcare machine learning.
-
-By converting fragmented, unstructured EHR records into standardized longitudinal timelines, this project demonstrates practical experience in:
-
-- Python-based healthcare data engineering
-- Clinical event parsing and data transformation
-- Unstructured text preprocessing
-- Patient-level data organization
-- Preparation of structured datasets for machine learning research
+- Orders are not confirmed administrations, and names are never merged or mapped to a standard vocabulary.
+- No reference ranges are inferred, so lab abnormality is only what the source flag says.
+- Nothing here is clinical decision support. It is a data-engineering and analytics demonstration.
 
 ## Author
 
-**Jonathan Betancourt**
+**Jonathan Betancourt**, Computer Science, University of Florida
 
-Computer Science — University of Florida
-
-Research interests: Healthcare Data Science, Biomedical Informatics, Machine Learning, and Computational Genomics
+Research interests: Healthcare Data Science, Biomedical Informatics, Machine Learning, Computational Genomics
 
 [GitHub](https://github.com/jbetancourt589) | [LinkedIn](https://www.linkedin.com/in/jonathan-a-betancourt)

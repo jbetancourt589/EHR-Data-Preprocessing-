@@ -1,0 +1,38 @@
+# Local-only Streamlit configuration for the EHR Clinical Analytics dashboard.
+
+[server]
+# Bind to the loopback interface only; the dashboard is never reachable from
+# other machines on the network.
+address = "localhost"
+headless = true
+runOnSave = false
+
+[browser]
+serverAddress = "localhost"
+# Do not send usage telemetry to Streamlit.
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+# Show only the exception type in the browser, never tracebacks (which can
+# include SQL parameters). Full details are still printed to the local console.
+showErrorDetails = "type"
+
+[theme]
+font = "sans-serif"
+baseRadius = "medium"
+showWidgetBorder = true
+
+[theme.light]
+primaryColor = "#2a78d6"
+backgroundColor = "#f9f9f7"
+secondaryBackgroundColor = "#f0efec"
+textColor = "#0b0b0b"
+borderColor = "#e1e0d9"
+
+[theme.dark]
+primaryColor = "#3987e5"
+backgroundColor = "#0d0d0d"
+secondaryBackgroundColor = "#1a1a19"
+textColor = "#f0efec"
+borderColor = "#2c2c2a"
